@@ -1,0 +1,37 @@
+# Встановлення бібліотеки для роботи з 7z-архівами
+!apt-get install p7zip-full
+
+# Розпаковка датасету
+!7z x /content/waste_clasification_image_sets.7z -o/content/
+
+# Перевірка структури папок
+!ls /content/waste_clasification_image_sets
+
+# Імпорт необхідних бібліотек
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, models, transforms
+
+# Перевірка чи є GPU
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Трансформації для тренувальних і валідаційних зображень
+transform = {
+    'train': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225])
+    ]),
+    'val': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225])
+    ]),
+}
+
+# Завантаження даних з розпакованої папки
+data_dir = '/content/waste_clasification_image_sets'
