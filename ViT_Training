@@ -1,0 +1,112 @@
+import os
+import shutil
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, transforms, models
+
+# ---- ПІДГОТОВКА ДАНИХ ----
+original_dir = '/content/waste_clasification_image_sets'
+base_dir = '/content/waste_clasification_split'
+categories = ['organic', 'recyclable']
+
+for split in ['train', 'val']:
+    for category in categories:
+        os.makedirs(os.path.join(base_dir, split, category), exist_ok=True)
+
+for category in categories:
+    category_path = os.path.join(original_dir, category)
+    images = [f for f in os.listdir(category_path) if os.path.isfile(os.path.join(category_path, f))]
+    train_imgs, val_imgs = train_test_split(images, test_size=0.2, random_state=42)
+
+    for img in train_imgs:
+        shutil.copyfile(os.path.join(category_path, img), os.path.join(base_dir, 'train', category, img))
+    for img in val_imgs:
+        shutil.copyfile(os.path.join(category_path, img), os.path.join(base_dir, 'val', category, img))
+
+print("✅ Розділення завершено!")
+
+# ---- ТРАНСФОРМАЦІЇ ----
+transform = {
+    'train': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(15),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+    ]),
+    'val': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
+    ]),
+}
+
+# ---- ДАНІ ----
+data_dir = base_dir
+image_datasets = {x: datasets.ImageFolder(os.path.join(data_dir, x), transform=transform[x]) for x in ['train', 'val']}
+dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=16, shuffle=True) for x in ['train', 'val']}
+
+# ---- ПРИСТРІЙ ----
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Використовується пристрій:", device)
+
+# ---- ViT МОДЕЛЬ ----
+model = models.vit_b_16(pretrained=True)
+model.heads.head = nn.Linear(model.heads.head.in_features, 2)  # 2 класи
+model = model.to(device)
+
+# ---- ВТРАТИ І ОПТИМІЗАТОР ----
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.AdamW(model.parameters(), lr=3e-5)
+
+# ---- ФУНКЦІЯ ДЛЯ ОБЧИСЛЕННЯ МЕТРИК ----
+def evaluate(model, dataloader):
+    model.eval()
+    all_labels = []
+    all_preds = []
+
+    with torch.no_grad():
+        for inputs, labels in dataloader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
+            _, preds = torch.max(outputs, 1)
+
+            all_labels.extend(labels.cpu().numpy())
+            all_preds.extend(preds.cpu().numpy())
+
+    acc = accuracy_score(all_labels, all_preds)
+    precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+    recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
+    f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+
+    return acc, precision, recall, f1
+
+# ---- НАВЧАННЯ ----
+num_epochs = 10
+for epoch in range(num_epochs):
+    model.train()
+    running_loss = 0.0
+
+    for inputs, labels in dataloaders['train']:
+        inputs, labels = inputs.to(device), labels.to(device)
+
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item()
+
+    avg_loss = running_loss / len(dataloaders['train'])
+
+    train_metrics = evaluate(model, dataloaders['train'])
+    val_metrics = evaluate(model, dataloaders['val'])
+
+    print(f"\n🧠 Epoch {epoch+1}/{num_epochs} | Train Loss: {avg_loss:.4f}")
+    print(f"Train -> Accuracy: {train_metrics[0]:.4f} | Precision: {train_metrics[1]:.4f} | Recall: {train_metrics[2]:.4f} | F1: {train_metrics[3]:.4f}")
+    print(f"Val   -> Accuracy: {val_metrics[0]:.4f} | Precision: {val_metrics[1]:.4f} | Recall: {val_metrics[2]:.4f} | F1: {val_metrics[3]:.4f}\n")
+
+print("✅ Навчання завершено!")
